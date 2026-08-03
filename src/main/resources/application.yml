@@ -1,0 +1,114 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: cloth-store
+
+  # ===================== H2 In-Memory Database =====================
+  # To switch to PostgreSQL later:
+  # 1. Uncomment the PostgreSQL dependency in pom.xml
+  # 2. Replace the datasource section below with the PostgreSQL block
+  # 3. Change ddl-auto if needed
+#  datasource:
+#    url: jdbc:h2:mem:clothstore;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+#    driver-class-name: org.h2.Driver
+#    username: sa
+#    password:
+
+  # ---- PostgreSQL (uncomment when ready) ----
+  datasource:
+     url: jdbc:postgresql://localhost:5432/leowear
+     driver-class-name: org.postgresql.Driver
+     username: postgres
+     password: postgres
+
+#  h2:
+#    console:
+#      enabled: true
+#      path: /h2-console
+#      settings:
+#        web-allow-others: true
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        #org.hibernate.dialect.H2Dialect For PostgreSQL use: org.hibernate.dialect.PostgreSQLDialect
+
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
+  # ===================== Email SMTP =====================
+  # Gmail: host smtp.gmail.com, port 587, use App Password (not account password)
+  # Brevo: host smtp-relay.brevo.com, port 587
+  # Resend: host smtp.resend.com, port 587, username = resend, password = API key
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:targetnests@gmail.com}
+    password: ${MAIL_PASSWORD:fpsjjrpaejvfplya}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+
+# JWT Configuration
+jwt:
+  secret: ClothStoreSecretKeyForJWTTokenGenerationMustBeAtLeast256BitsLong2024SecureKey!!
+  access-token-expiration-ms: 900000
+  refresh-token-expiration-ms: 604800000
+
+# CORS
+cors:
+  allowed-origins: http://localhost:4200
+
+# Public origin used by /api/sitemap.xml URLs. Update to real domain in prod.
+sitemap:
+  public-base-url: https://leowear.example.com
+
+logging:
+  level:
+    com.clothstore: INFO
+    org.springframework.security: WARN
+
+# ===================== Razorpay Payment Gateway =====================
+# TODO: Replace dummy values with real credentials from https://dashboard.razorpay.com/
+# 1. Sign up / login → Settings → API Keys
+# 2. Generate Test Key (or Live Key for production)
+# 3. Paste key_id and key_secret below (or set env RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET)
+# 4. Set mode to "live" only with live keys
+# While key-id contains REPLACE or mode is "mock", payments use safe MOCK checkout (no real charge).
+razorpay:
+  key-id: rzp_test_TKc2owFS6i74T3
+  key-secret: Z7LbFQwvaeiZjVtQtOyxuA6W
+  # mock | test | live  — mock works without real keys; test/live call Razorpay API
+  mode: ${RAZORPAY_MODE:test}
+  currency: INR
+  company-name: Leowear
+
+# ===================== App: Mail + SMS =====================
+# MAIL: set enabled=true after filling spring.mail.* above
+# SMS:  provider=mock|msg91|twilio — set enabled=true and credentials
+app:
+  mail:
+    enabled: ${MAIL_ENABLED:true}
+    from: ${MAIL_FROM:targetnests@gmail.com}
+    from-name: Leo Wear
+  sms:
+    enabled: true
+    provider: msg91
+    msg91:
+      auth-key: 556484A4TX0WJZtlM6a6e5995P1
+      template-id: 6a6e5ad53347c8bbc10ba963
+      sender-id: LEOWEAR
+
