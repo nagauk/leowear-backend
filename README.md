@@ -37,6 +37,8 @@ A full-stack clothing store application with **Angular 17 + Bootstrap 5** fronte
 | Database  | H2 (in-memory) — ready for PostgreSQL |
 | Auth      | JWT access tokens + rotating refresh tokens |
 
+---
+
 ## Used Tools
 
 | Layer    | Technology                       |
@@ -45,6 +47,8 @@ A full-stack clothing store application with **Angular 17 + Bootstrap 5** fronte
 | Backend  | https://render.com/              |
 | Database | https://console.neon.tech/       |
 | Images   | https://console.cloudinary.com/  |
+
+
 ---
 
 
