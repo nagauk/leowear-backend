@@ -70,12 +70,7 @@ Frontend runs at **http://localhost:4200**
 
 ---
 
-## Demo Accounts
 
-| Role     | Username   | Password     |
-|----------|------------|--------------|
-| Admin    | `admin`    | `admin123`   |
-| Customer | `customer` | `customer123`|
 
 ---
 

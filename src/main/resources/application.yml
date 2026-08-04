@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: cloth-store
+    name: cloth-storenpg_v7KaqnRGf1Eo
 
   # ===================== H2 In-Memory Database =====================
   # To switch to PostgreSQL later:
@@ -111,4 +111,18 @@ app:
       auth-key: 556484A4TX0WJZtlM6a6e5995P1
       template-id: 6a6e5ad53347c8bbc10ba963
       sender-id: LEOWEAR
+
+# ===================== Cloudinary Image Hosting =====================
+# Credentials via env: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
+cloudinary:
+  cloud-name:          ${CLOUDINARY_CLOUD_NAME:olnxbh6x}
+  api-key:             ${CLOUDINARY_API_KEY:789349728391276}
+  api-secret:          ${CLOUDINARY_API_SECRET:RmhCq_FJ5iG7Zf_q_hHxeZGVpmc}
+  folder:              ${CLOUDINARY_FOLDER:leowear/products}
+  # Server-side resize target. Every uploaded image is reduced to <= this byte size.
+  # Overridable per env: e.g. CLOUDINARY_MAX_FILE_SIZE_BYTES=524288 for 512KB.
+  max-file-size-bytes: ${CLOUDINARY_MAX_FILE_SIZE_BYTES:1048576}  # 1 MB
+  # Longest edge downscale target. The resizer picks the largest dimension and
+  # scales the image so its longest side is <= this value before re-encoding.
+  max-dimension:       ${CLOUDINARY_MAX_DIMENSION:1600}
 
