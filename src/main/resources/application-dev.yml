@@ -3,32 +3,32 @@ server:
 
 spring:
   application:
-    name: cloth-store
+    name: cloth-storenpg_v7KaqnRGf1Eo
 
   # ===================== H2 In-Memory Database =====================
   # To switch to PostgreSQL later:
   # 1. Uncomment the PostgreSQL dependency in pom.xml
   # 2. Replace the datasource section below with the PostgreSQL block
   # 3. Change ddl-auto if needed
-  #  datasource:
-  #    url: jdbc:h2:mem:clothstore;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-  #    driver-class-name: org.h2.Driver
-  #    username: sa
-  #    password:
+#  datasource:
+#    url: jdbc:h2:mem:clothstore;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+#    driver-class-name: org.h2.Driver
+#    username: sa
+#    password:
 
   # ---- PostgreSQL (uncomment when ready) ----
   datasource:
-    url: jdbc:postgresql://ep-broad-bonus-aztylger-pooler.c-3.ap-southeast-1.aws.neon.tech/leowear?sslmode=require&channel_binding=require
-    driver-class-name: org.postgresql.Driver
-    username: leowear
-    password: npg_v7KaqnRGf1Eo
+     url: jdbc:postgresql://localhost:5432/leowear
+     driver-class-name: org.postgresql.Driver
+     username: postgres
+     password: postgres
 
-  #  h2:
-  #    console:
-  #      enabled: true
-  #      path: /h2-console
-  #      settings:
-  #        web-allow-others: true
+#  h2:
+#    console:
+#      enabled: true
+#      path: /h2-console
+#      settings:
+#        web-allow-others: true
 
   jpa:
     hibernate:
@@ -125,3 +125,4 @@ cloudinary:
   # Longest edge downscale target. The resizer picks the largest dimension and
   # scales the image so its longest side is <= this value before re-encoding.
   max-dimension:       ${CLOUDINARY_MAX_DIMENSION:1600}
+
