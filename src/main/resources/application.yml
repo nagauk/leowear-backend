@@ -70,7 +70,7 @@ jwt:
 
 # CORS
 cors:
-  allowed-origins: https://leowear-frontend.pages.dev/
+  allowed-origins: "https://leowear.in,https://www.leowear.in,https://leowear-frontend.pages.dev,http://localhost:4200"
 
 # Public origin used by /api/sitemap.xml URLs. Update to real domain in prod.
 sitemap:
