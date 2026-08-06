@@ -22,6 +22,9 @@ spring:
      driver-class-name: org.postgresql.Driver
      username: leowear
      password: npg_v7KaqnRGf1Eo
+     max-lifetime: 600000 # 10 minutes (ms)
+     keepalive-time: 300000 # 5 minutes (ms)
+     validation-timeout: 3000
 
 #  h2:
 #    console:
