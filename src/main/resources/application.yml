@@ -89,10 +89,10 @@ logging:
 # 4. Set mode to "live" only with live keys
 # While key-id contains REPLACE or mode is "mock", payments use safe MOCK checkout (no real charge).
 razorpay:
-  key-id: rzp_test_TKc2owFS6i74T3
-  key-secret: Z7LbFQwvaeiZjVtQtOyxuA6W
+  key-id: rzp_live_TMMSmsxphZ96Jz
+  key-secret: xBGg2qoig9LbMHm4aw5hRY0F
   # mock | test | live  — mock works without real keys; test/live call Razorpay API
-  mode: ${RAZORPAY_MODE:test}
+  mode: ${RAZORPAY_MODE:live}
   currency: INR
   company-name: Leowear
 

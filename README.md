@@ -41,12 +41,13 @@ A full-stack clothing store application with **Angular 17 + Bootstrap 5** fronte
 
 ## Used Tools
 
-| Layer    | Technology                       |
-|----------|----------------------------------|
-| Frontend | https://dash.cloudflare.com/     |
-| Backend  | https://render.com/              |
-| Database | https://console.neon.tech/       |
-| Images   | https://console.cloudinary.com/  |
+| Layer      | Technology                       |
+|------------|----------------------------------|
+| Frontend   | https://dash.cloudflare.com/     |
+| Backend    | https://render.com/              |
+| Database   | https://console.neon.tech/       |
+| Images     | https://console.cloudinary.com/  |
+| Monitoring | https://dashboard.uptimerobot.com/monitors/803672436  |
 
 
 ---
