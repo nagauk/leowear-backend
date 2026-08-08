@@ -117,4 +117,23 @@ public class OrderController {
 
         return new ResponseEntity<>(pdf, headers, org.springframework.http.HttpStatus.OK);
     }
+
+    /**
+     * Staff-only: download single-order invoice PDF (A6).
+     * Invoice number = Order number. Contains full customer + shipping details
+     * for packing and courier use.
+     */
+    @GetMapping(value = "/{id}/invoice", produces = MediaType.APPLICATION_PDF_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN','EMPLOYEE')")
+    public ResponseEntity<byte[]> downloadInvoice(@PathVariable Long id) {
+        OrderPdfService.InvoicePdf invoice = orderPdfService.buildInvoicePdf(id);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_PDF);
+        headers.setContentDispositionFormData("attachment", invoice.filename());
+        headers.setContentLength(invoice.bytes().length);
+        headers.setCacheControl("no-store");
+
+        return new ResponseEntity<>(invoice.bytes(), headers, org.springframework.http.HttpStatus.OK);
+    }
 }

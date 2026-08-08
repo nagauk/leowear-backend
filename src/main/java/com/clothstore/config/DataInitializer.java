@@ -40,7 +40,7 @@ public class DataInitializer implements CommandLineRunner {
 
         userRepository.save(User.builder()
                 .username("admin")
-                .email("admin@leowear.com")
+                .email("admin@leowear.in")
                 .password(passwordEncoder.encode("admin123"))
                 .fullName("Leo Wear Admin")
                 .role(Role.ADMIN)
