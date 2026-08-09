@@ -379,7 +379,7 @@ public class OrderService {
                 .phone(order.getPhone())
                 .notes(order.getNotes())
                 // Customer payloads must never include courier / tracking info.
-                .shippingDetails(isStaff ? order.getShippingDetails() : null)
+                .shippingDetails(order.getShippingDetails())
                 .paymentMethod(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : null)
                 .paymentStatus(order.getPaymentStatus() != null ? order.getPaymentStatus().name() : null)
                 .paymentRef(order.getPaymentRef())
