@@ -81,6 +81,16 @@ public class OrderController {
                 orderService.updateStatus(id, status)));
     }
 
+    /**
+     * Staff-only: mark order fully paid after COD remaining cash is collected at delivery.
+     */
+    @PatchMapping("/{id}/mark-paid")
+    @PreAuthorize("hasAnyRole('ADMIN','EMPLOYEE')")
+    public ResponseEntity<ApiResponse<OrderDto>> markFullyPaid(@PathVariable Long id) {
+        return ResponseEntity.ok(ApiResponse.ok("Marked fully paid",
+                orderService.markFullyPaid(id)));
+    }
+
     /** Staff-only: set courier / tracking / AWB info on a confirmed order. */
     @PutMapping("/{id}/shipping-details")
     @PreAuthorize("hasAnyRole('ADMIN','EMPLOYEE')")

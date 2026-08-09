@@ -4,6 +4,7 @@ import com.clothstore.dto.OrderDto;
 import com.clothstore.dto.PaymentSessionDto;
 import com.clothstore.dto.PaymentVerifyRequest;
 import com.clothstore.entity.Order;
+import com.clothstore.entity.PaymentMethod;
 import com.clothstore.entity.PaymentStatus;
 import com.clothstore.exception.BadRequestException;
 import com.clothstore.exception.ResourceNotFoundException;
@@ -77,7 +78,37 @@ public class PaymentService {
             throw new BadRequestException("Order is already paid");
         }
 
-        long amountPaise = order.getTotalAmount()
+        boolean isCod = order.getPaymentMethod() == PaymentMethod.COD;
+        boolean codAdvance = false;
+        boolean codRemaining = false;
+        BigDecimal chargeAmount = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
+
+        if (isCod) {
+            if (order.getPaymentStatus() == PaymentStatus.PARTIAL) {
+                // Collect remaining balance (total − advance already paid)
+                BigDecimal paid = order.getPaidAmount() != null ? order.getPaidAmount() : BigDecimal.ZERO;
+                if (paid.compareTo(BigDecimal.ZERO) <= 0 && order.getPlatformCharge() != null) {
+                    paid = order.getPlatformCharge();
+                }
+                chargeAmount = chargeAmount.subtract(paid);
+                if (chargeAmount.compareTo(BigDecimal.ZERO) < 0) {
+                    chargeAmount = BigDecimal.ZERO;
+                }
+                codRemaining = true;
+            } else {
+                // First online payment: COD advance (reduces amount due at delivery)
+                BigDecimal advance = order.getPlatformCharge() != null
+                        ? order.getPlatformCharge()
+                        : new BigDecimal("99");
+                if (advance.compareTo(BigDecimal.ZERO) <= 0) {
+                    advance = new BigDecimal("99");
+                }
+                chargeAmount = advance;
+                codAdvance = true;
+            }
+        }
+
+        long amountPaise = chargeAmount
                 .multiply(BigDecimal.valueOf(100))
                 .longValue();
 
@@ -91,13 +122,31 @@ public class PaymentService {
         if (!mock) {
             rzpOrderId = createRazorpayOrder(order, amountPaise);
         } else {
-            log.info("Payment MOCK session for order {} amount ₹{}", order.getOrderNumber(), order.getTotalAmount());
+            log.info("Payment MOCK session for order {} amount ₹{} (codAdvance={}, codRemaining={})",
+                    order.getOrderNumber(), chargeAmount, codAdvance, codRemaining);
+        }
+
+        String message;
+        if (mock) {
+            if (codAdvance) {
+                message = "Mock payment — COD advance ₹" + chargeAmount + " (deducted from order total). Remaining at delivery.";
+            } else if (codRemaining) {
+                message = "Mock payment — remaining COD balance ₹" + chargeAmount + ".";
+            } else {
+                message = "Mock payment mode — set razorpay.key-id / key-secret to enable real Razorpay.";
+            }
+        } else if (codAdvance) {
+            message = "Pay advance ₹" + chargeAmount + " online. This amount is deducted from your order total; pay the rest on delivery.";
+        } else if (codRemaining) {
+            message = "Pay remaining balance ₹" + chargeAmount + " online.";
+        } else {
+            message = "Complete payment via Razorpay Checkout";
         }
 
         return PaymentSessionDto.builder()
                 .orderId(order.getId())
                 .orderNumber(order.getOrderNumber())
-                .amount(order.getTotalAmount())
+                .amount(chargeAmount)
                 .currency(currency)
                 .keyId(mock ? null : keyId)
                 .razorpayOrderId(rzpOrderId)
@@ -106,9 +155,8 @@ public class PaymentService {
                 .customerEmail(order.getUser().getEmail())
                 .customerPhone(order.getPhone() != null ? order.getPhone() : order.getUser().getPhone())
                 .mock(mock)
-                .message(mock
-                        ? "Mock payment mode — set razorpay.key-id / key-secret to enable real Razorpay."
-                        : "Complete payment via Razorpay Checkout")
+                .codPlatformFee(codAdvance) // flag still means "COD advance session"
+                .message(message)
                 .build();
     }
 

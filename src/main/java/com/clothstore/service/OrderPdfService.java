@@ -258,14 +258,12 @@ public class OrderPdfService {
         // Items — multi-line list of variants. This is the packing list.
         addItemsCell(table, d, bodyFont, mutedFont);
 
-        // Total
-        String total = d.getTotalAmount() == null
-                ? "—"
-                : "Rs." + d.getTotalAmount().setScale(0, RoundingMode.HALF_UP).toPlainString();
+        // Total + paid / remaining breakdown
+        String total = composeMoneyBreakdown(d);
         addTextCell(table, total, moneyFont, Element.ALIGN_RIGHT);
 
         // Payment
-        String payment = composePayment(d.getPaymentStatus(), d.getPaymentMethod());
+        String payment = composePayment(d);
         addTextCell(table, payment, bodyFont);
 
         // Status — colour-coded pill so a printed sheet is glanceable.
@@ -422,7 +420,8 @@ public class OrderPdfService {
             String pm = o.getPaymentMethod() == null ? "" : o.getPaymentMethod().name();
             return switch (c) {
                 case "PAID" -> "PAID".equals(ps);
-                case "PENDING" -> !"PAID".equals(ps); // mirrors on-screen PENDING chip
+                case "PARTIAL" -> "PARTIAL".equals(ps);
+                case "PENDING" -> "PENDING".equals(ps) || ps.isEmpty();
                 case "COD" -> "COD".equals(pm);
                 case "PREPAID" -> "PREPAID".equals(pm);
                 default -> true;
@@ -433,13 +432,58 @@ public class OrderPdfService {
     private static String nullSafe(String s) { return s == null ? "" : s; }
     private static boolean notBlank(String s) { return s != null && !s.isBlank(); }
 
-    private static String composePayment(String status, String method) {
-        if (status == null && method == null) return "";
+    private static String composePayment(OrderDto o) {
+        if (o == null) return "";
+        String status = o.getPaymentStatus() == null ? null : o.getPaymentStatus();
+        String method = o.getPaymentMethod() == null ? null : o.getPaymentMethod();
         StringBuilder sb = new StringBuilder();
         if (status != null) sb.append(status);
         if (method != null) {
             if (sb.length() > 0) sb.append(" / ");
             sb.append(method);
+        }
+        BigDecimal total = o.getTotalAmount() != null ? o.getTotalAmount() : BigDecimal.ZERO;
+        BigDecimal paid = o.getPaidAmount() != null ? o.getPaidAmount() : BigDecimal.ZERO;
+        if ("PARTIAL".equals(status) && paid.compareTo(BigDecimal.ZERO) <= 0
+                && o.getPlatformCharge() != null) {
+            paid = o.getPlatformCharge();
+        }
+        if ("PAID".equals(status) && paid.compareTo(BigDecimal.ZERO) <= 0) {
+            paid = total;
+        }
+        BigDecimal remaining = total.subtract(paid);
+        if (remaining.compareTo(BigDecimal.ZERO) < 0) remaining = BigDecimal.ZERO;
+        if (paid.compareTo(BigDecimal.ZERO) > 0 || remaining.compareTo(BigDecimal.ZERO) > 0) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append("Paid Rs.").append(paid.setScale(0, RoundingMode.HALF_UP).toPlainString());
+            if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                sb.append(" · Due Rs.").append(remaining.setScale(0, RoundingMode.HALF_UP).toPlainString());
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String composeMoneyBreakdown(OrderDto o) {
+        if (o == null || o.getTotalAmount() == null) return "—";
+        BigDecimal total = o.getTotalAmount();
+        BigDecimal paid = o.getPaidAmount() != null ? o.getPaidAmount() : BigDecimal.ZERO;
+        String status = o.getPaymentStatus() == null ? "" : o.getPaymentStatus();
+        if ("PARTIAL".equals(status) && paid.compareTo(BigDecimal.ZERO) <= 0
+                && o.getPlatformCharge() != null) {
+            paid = o.getPlatformCharge();
+        }
+        if ("PAID".equals(status) && paid.compareTo(BigDecimal.ZERO) <= 0) {
+            paid = total;
+        }
+        BigDecimal remaining = total.subtract(paid);
+        if (remaining.compareTo(BigDecimal.ZERO) < 0) remaining = BigDecimal.ZERO;
+        StringBuilder sb = new StringBuilder("Rs.")
+                .append(total.setScale(0, RoundingMode.HALF_UP).toPlainString());
+        if (paid.compareTo(BigDecimal.ZERO) > 0 || remaining.compareTo(BigDecimal.ZERO) > 0) {
+            sb.append("\nPaid ").append(paid.setScale(0, RoundingMode.HALF_UP).toPlainString());
+            if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                sb.append("\nDue ").append(remaining.setScale(0, RoundingMode.HALF_UP).toPlainString());
+            }
         }
         return sb.toString();
     }
@@ -487,7 +531,6 @@ public class OrderPdfService {
         PdfWriter.getInstance(doc, out);
         doc.open();
 
-       // addInvoiceHeader(doc);
         addInvoiceMeta(doc, order);
         addCustomerBlock(doc, order);
         addItemsTable(doc, order);
@@ -498,44 +541,10 @@ public class OrderPdfService {
         doc.close();
         return new InvoicePdf(out.toByteArray(), invoiceFilename(order));
     }
-
-    private void addInvoiceHeader(Document doc) {
-        Font brand = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 11, ACCENT);
-        Font small = FontFactory.getFont(FontFactory.HELVETICA, 7, MUTED);
-
-        Paragraph title = new Paragraph("LEO WEAR", brand);
-        title.setAlignment(Element.ALIGN_CENTER);
-        title.setSpacingAfter(1f);
-        doc.add(title);
-
-        Paragraph addr = new Paragraph("Miyapur, Hyderabad", small);
-        addr.setAlignment(Element.ALIGN_CENTER);
-        addr.setSpacingAfter(0.5f);
-        doc.add(addr);
-
-        Paragraph phone = new Paragraph("Ph: 7989398156", small);
-        phone.setAlignment(Element.ALIGN_CENTER);
-        phone.setSpacingAfter(4f);
-        doc.add(phone);
-
-        // Divider
-        PdfPTable line = new PdfPTable(1);
-        line.setWidthPercentage(100f);
-        PdfPCell lc = new PdfPCell(new Phrase(" "));
-        lc.setBorder(Rectangle.BOTTOM);
-        lc.setBorderColor(LINE);
-        lc.setBorderWidth(0.8f);
-        lc.setFixedHeight(2f);
-        lc.setPadding(0);
-        line.addCell(lc);
-        doc.add(line);
-    }
-
     private void addInvoiceMeta(Document doc, Order order) {
         Font label = FontFactory.getFont(FontFactory.HELVETICA, 7, MUTED);
         Font value = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, INK);
         Font invTitle = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, ACCENT);
-
 
         PdfPTable meta = new PdfPTable(2);
         meta.setWidthPercentage(100f);
@@ -548,10 +557,6 @@ public class OrderPdfService {
 
         meta.addCell(metaCell("Invoice # ", orderNo, label, value, Element.ALIGN_LEFT));
         meta.addCell(metaCell("Date", date, label, value, Element.ALIGN_RIGHT));
-
-        /*String status = order.getStatus() != null ? order.getStatus().name() : "—";
-        meta.addCell(metaCell("Order Status", status, label, value, Element.ALIGN_LEFT));
-        meta.addCell(metaCell("", "", label, value, Element.ALIGN_RIGHT));*/
 
         doc.add(meta);
     }
@@ -615,17 +620,6 @@ public class OrderPdfService {
             Paragraph e = new Paragraph("Email: " + email, muted);
             e.setSpacingAfter(1f);
             doc.add(e);
-        }
-
-        // Bill To (only if different from ship)
-        if (notBlank(billing) && !billing.equalsIgnoreCase(shipAddr)) {
-            Paragraph billTitle = new Paragraph("BILL TO", section);
-            billTitle.setSpacingBefore(2f);
-            billTitle.setSpacingAfter(1f);
-            doc.add(billTitle);
-            Paragraph b = new Paragraph(billing, body);
-            b.setSpacingAfter(2f);
-            doc.add(b);
         }
     }
 
@@ -727,7 +721,19 @@ public class OrderPdfService {
 
         BigDecimal sub = order.getSubtotal() != null ? order.getSubtotal() : BigDecimal.ZERO;
         BigDecimal del = order.getDeliveryCharge() != null ? order.getDeliveryCharge() : BigDecimal.ZERO;
+        BigDecimal advance = order.getPlatformCharge() != null ? order.getPlatformCharge() : BigDecimal.ZERO;
+        // Total is subtotal + delivery only; advance is not an extra charge
         BigDecimal tot = order.getTotalAmount() != null ? order.getTotalAmount() : sub.add(del);
+        BigDecimal paid = order.getPaidAmount() != null ? order.getPaidAmount() : BigDecimal.ZERO;
+        String ps = order.getPaymentStatus() == null ? "" : order.getPaymentStatus().name();
+        if ("PARTIAL".equals(ps) && paid.compareTo(BigDecimal.ZERO) <= 0 && advance.compareTo(BigDecimal.ZERO) > 0) {
+            paid = advance;
+        }
+        if ("PAID".equals(ps) && paid.compareTo(BigDecimal.ZERO) <= 0) {
+            paid = tot;
+        }
+        BigDecimal remaining = tot.subtract(paid);
+        if (remaining.compareTo(BigDecimal.ZERO) < 0) remaining = BigDecimal.ZERO;
 
         t.addCell(totalCell("Subtotal", label, Element.ALIGN_RIGHT));
         t.addCell(totalCell(rupees(sub), value, Element.ALIGN_RIGHT));
@@ -750,6 +756,23 @@ public class OrderPdfService {
 
         t.addCell(totalCell("TOTAL", totalL, Element.ALIGN_RIGHT));
         t.addCell(totalCell(rupees(tot), totalV, Element.ALIGN_RIGHT));
+
+        if (paid.compareTo(BigDecimal.ZERO) > 0 || remaining.compareTo(BigDecimal.ZERO) > 0) {
+            t.addCell(totalCell("Paid", label, Element.ALIGN_RIGHT));
+            t.addCell(totalCell(rupees(paid), value, Element.ALIGN_RIGHT));
+            if (remaining.compareTo(BigDecimal.ZERO) > 0) {
+                t.addCell(totalCell("Due", label, Element.ALIGN_RIGHT));
+                t.addCell(totalCell(rupees(remaining), value, Element.ALIGN_RIGHT));
+            }
+            if (order.getPaymentStatus() != null) {
+                t.addCell(totalCell("Status", label, Element.ALIGN_RIGHT));
+                String statusLabel = order.getPaymentStatus().name();
+                if (order.getPaymentMethod() != null) {
+                    statusLabel = statusLabel + " / " + order.getPaymentMethod().name();
+                }
+                t.addCell(totalCell(statusLabel, value, Element.ALIGN_RIGHT));
+            }
+        }
 
         doc.add(t);
     }
@@ -808,11 +831,11 @@ public class OrderPdfService {
 
     private void addInvoiceFooter(Document doc) {
         Font f = FontFactory.getFont(FontFactory.HELVETICA, 6, MUTED);
-        Paragraph p = new Paragraph("Thank you for shopping with Leo Wear!", f);
+        Paragraph p = new Paragraph("Thank you for shopping with Leo Wear! Miyapur, Hyderabad , +91 7989398156", f);
         p.setAlignment(Element.ALIGN_CENTER);
         p.setSpacingBefore(6f);
         doc.add(p);
-        Paragraph p2 = new Paragraph("Miyapur, Hyderabad. Ph: 7989398156", f);
+        Paragraph p2 = new Paragraph("This document is valid for packing & shipping", f);
         p2.setAlignment(Element.ALIGN_CENTER);
         p2.setSpacingAfter(0);
         doc.add(p2);

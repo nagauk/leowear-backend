@@ -135,16 +135,19 @@ public class OrderService {
         BigDecimal delivery = storeSettingsService.computeDeliveryCharge(total);
         order.setSubtotal(total);
         order.setDeliveryCharge(delivery);
-        order.setTotalAmount(total.add(delivery));
+        // COD: ₹99 advance online (part of total, not an extra fee); rest at delivery
+        BigDecimal advance = BigDecimal.ZERO;
+        if (order.getPaymentMethod() == PaymentMethod.COD) {
+            advance = new BigDecimal("99");
+        }
+        order.setPlatformCharge(advance); // advance amount (legacy column name)
+        order.setTotalAmount(total.add(delivery)); // do NOT add advance on top of total
+        order.setPaidAmount(BigDecimal.ZERO);
         if (request.getPincode() != null) {
             order.setPincode(request.getPincode());
         }
-        // PREPAID stays PENDING until Razorpay (or mock) payment is verified
-        if (order.getPaymentMethod() == PaymentMethod.PREPAID) {
-            order.setPaymentStatus(PaymentStatus.PENDING);
-        } else {
-            order.setPaymentStatus(PaymentStatus.PENDING); // COD — can Pay Now later
-        }
+        // PREPAID and COD stay PENDING until first online payment is confirmed
+        order.setPaymentStatus(PaymentStatus.PENDING);
         orderRepository.save(order);
         notifyCustomerStatus(order);
         // Place order runs as the customer — hide staff-only shipping details.
@@ -327,12 +330,13 @@ public class OrderService {
     }
 
     public OrderDto toDto(Order order) {
-        // Default to staff view — staff-only callers should pass true explicitly;
-        // customer-facing callers should pass false to hide shippingDetails.
         return toDto(order, true);
     }
 
     public OrderDto toDto(Order order, boolean isStaff) {
+        // isStaff is retained for future field-level differences; shippingDetails
+        // (courier / tracking / AWB) is intentionally exposed to the order owner
+        // so customers can track SHIPPED / DELIVERED orders on "My Orders".
         return OrderDto.builder()
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
@@ -372,13 +376,15 @@ public class OrderService {
                 }).toList())
                 .subtotal(order.getSubtotal())
                 .deliveryCharge(order.getDeliveryCharge())
+                .platformCharge(order.getPlatformCharge() != null ? order.getPlatformCharge() : BigDecimal.ZERO)
                 .totalAmount(order.getTotalAmount())
+                .paidAmount(resolvePaidAmount(order))
+                .remainingAmount(resolveRemainingAmount(order))
                 .pincode(order.getPincode())
                 .status(order.getStatus())
                 .shippingAddress(order.getShippingAddress())
                 .phone(order.getPhone())
                 .notes(order.getNotes())
-                // Customer payloads must never include courier / tracking info.
                 .shippingDetails(order.getShippingDetails())
                 .paymentMethod(order.getPaymentMethod() != null ? order.getPaymentMethod().name() : null)
                 .paymentStatus(order.getPaymentStatus() != null ? order.getPaymentStatus().name() : null)
@@ -391,6 +397,27 @@ public class OrderService {
                 .build();
     }
 
+    private BigDecimal resolvePaidAmount(Order order) {
+        if (order.getPaidAmount() != null) {
+            return order.getPaidAmount();
+        }
+        if (order.getPaymentStatus() == PaymentStatus.PAID && order.getTotalAmount() != null) {
+            return order.getTotalAmount();
+        }
+        if (order.getPaymentStatus() == PaymentStatus.PARTIAL) {
+            BigDecimal platform = order.getPlatformCharge() != null ? order.getPlatformCharge() : BigDecimal.ZERO;
+            return platform;
+        }
+        return BigDecimal.ZERO;
+    }
+
+    private BigDecimal resolveRemainingAmount(Order order) {
+        BigDecimal total = order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO;
+        BigDecimal paid = resolvePaidAmount(order);
+        BigDecimal remaining = total.subtract(paid);
+        return remaining.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : remaining;
+    }
+
     private PaymentMethod resolvePaymentMethod(String raw) {
         if (raw == null || raw.isBlank()) return PaymentMethod.COD;
         try {
@@ -400,7 +427,14 @@ public class OrderService {
         }
     }
 
-    /** Simulate prepaid gateway success */
+    /**
+     * Record a successful online payment.
+     * <ul>
+     *   <li>COD + PENDING → PARTIAL (₹99 advance collected; reduces remaining due)</li>
+     *   <li>COD + PARTIAL → PAID (remaining balance collected)</li>
+     *   <li>PREPAID → PAID (full amount)</li>
+     * </ul>
+     */
     @Transactional
     public OrderDto markPaid(Long orderId, String username, String paymentRef, boolean isAdmin) {
         Order order = orderRepository.findById(orderId)
@@ -411,13 +445,59 @@ public class OrderService {
         if (order.getPaymentStatus() == PaymentStatus.PAID) {
             return toDto(order, isAdmin);
         }
-        order.setPaymentMethod(PaymentMethod.PREPAID);
-        order.setPaymentStatus(PaymentStatus.PAID);
-        order.setPaymentRef(paymentRef != null ? paymentRef : ("LW" + System.currentTimeMillis()));
+
+        String ref = paymentRef != null ? paymentRef : ("LW" + System.currentTimeMillis());
+        order.setPaymentRef(ref);
+
+        if (order.getPaymentMethod() == PaymentMethod.COD) {
+            if (order.getPaymentStatus() == PaymentStatus.PARTIAL) {
+                // Customer paid remaining balance online
+                order.setPaidAmount(order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
+                order.setPaymentStatus(PaymentStatus.PAID);
+            } else {
+                // First payment: COD advance (part of order total)
+                BigDecimal advance = order.getPlatformCharge() != null
+                        ? order.getPlatformCharge()
+                        : new BigDecimal("99");
+                if (advance.compareTo(BigDecimal.ZERO) <= 0) {
+                    advance = new BigDecimal("99");
+                }
+                order.setPaidAmount(advance);
+                order.setPaymentStatus(PaymentStatus.PARTIAL);
+            }
+        } else {
+            order.setPaymentMethod(PaymentMethod.PREPAID);
+            order.setPaidAmount(order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
+            order.setPaymentStatus(PaymentStatus.PAID);
+        }
+
         if (order.getStatus() == OrderStatus.PENDING) {
             order.setStatus(OrderStatus.CONFIRMED);
         }
         return toDto(orderRepository.save(order), isAdmin);
+    }
+
+    /**
+     * Staff action: mark COD order fully paid after remaining cash is collected at delivery.
+     */
+    @Transactional
+    public OrderDto markFullyPaid(Long orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order not found: " + orderId));
+        if (order.getPaymentStatus() == PaymentStatus.PAID) {
+            return toDto(order, true);
+        }
+        order.setPaidAmount(order.getTotalAmount() != null ? order.getTotalAmount() : BigDecimal.ZERO);
+        order.setPaymentStatus(PaymentStatus.PAID);
+        if (order.getPaymentRef() == null || order.getPaymentRef().isBlank()) {
+            order.setPaymentRef("COD-CASH-" + System.currentTimeMillis());
+        } else if (!order.getPaymentRef().contains("COD-CASH")) {
+            order.setPaymentRef(order.getPaymentRef() + "+COD-CASH");
+        }
+        if (order.getStatus() == OrderStatus.PENDING) {
+            order.setStatus(OrderStatus.CONFIRMED);
+        }
+        return toDto(orderRepository.save(order), true);
     }
 }
 

@@ -27,4 +27,6 @@ public class PaymentSessionDto {
     /** true = use in-app mock pay button (no Razorpay keys configured yet) */
     private boolean mock;
     private String message;
+    /** true when amount is COD platform fee only (rest paid at delivery) */
+    private boolean codPlatformFee;
 }

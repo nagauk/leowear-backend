@@ -39,7 +39,16 @@ public class Order {
     @Builder.Default
     private BigDecimal deliveryCharge = BigDecimal.ZERO;
 
-    /** Grand total = subtotal + deliveryCharge */
+    /**
+     * COD online advance (₹99). Part of the order total — not an extra fee.
+     * Zero for prepaid. After advance is paid: paidAmount = advance; remaining = total − advance.
+     * DB column kept as platform_charge for compatibility.
+     */
+    @Column(name = "platform_charge", precision = 10, scale = 2)
+    @Builder.Default
+    private BigDecimal platformCharge = BigDecimal.ZERO;
+
+    /** Grand total = subtotal + deliveryCharge (advance is deducted from this, not added). */
     @Column(name = "total_amount", nullable = false, precision = 12, scale = 2)
     private BigDecimal totalAmount;
 
@@ -79,6 +88,14 @@ public class Order {
 
     @Column(name = "payment_ref", length = 80)
     private String paymentRef;
+
+    /**
+     * Amount already collected online (platform fee for COD, or full total for prepaid).
+     * Remaining = totalAmount - paidAmount (due at delivery for COD PARTIAL).
+     */
+    @Column(name = "paid_amount", precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal paidAmount = BigDecimal.ZERO;
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;

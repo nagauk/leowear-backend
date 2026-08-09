@@ -17,7 +17,13 @@ public class OrderDto {
     private List<OrderItemDto> items;
     private BigDecimal subtotal;
     private BigDecimal deliveryCharge;
+    /** COD advance (₹99); included in total, not an extra fee. */
+    private BigDecimal platformCharge;
     private BigDecimal totalAmount;
+    /** Amount already collected (COD advance or full prepaid). */
+    private BigDecimal paidAmount;
+    /** totalAmount − paidAmount; due at delivery for COD PARTIAL. */
+    private BigDecimal remainingAmount;
     private String pincode;
     private OrderStatus status;
     private String shippingAddress;
@@ -28,7 +34,7 @@ public class OrderDto {
     private String paymentMethod;
     private String paymentStatus;
     private String paymentRef;
-    /** true when customer still needs to pay (COD unpaid or prepaid pending) */
+    /** true when customer still needs to pay (PENDING or PARTIAL) */
     private Boolean needsPayment;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
