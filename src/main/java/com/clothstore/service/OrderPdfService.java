@@ -808,16 +808,6 @@ public class OrderPdfService {
             doc.add(r);
         }
 
-        if (notBlank(order.getShippingDetails())) {
-            Paragraph shipTitle = new Paragraph("SHIPPING / TRACKING", section);
-            shipTitle.setSpacingBefore(3f);
-            shipTitle.setSpacingAfter(1f);
-            doc.add(shipTitle);
-            Paragraph s = new Paragraph(order.getShippingDetails(), body);
-            s.setSpacingAfter(1f);
-            doc.add(s);
-        }
-
         if (notBlank(order.getNotes())) {
             Paragraph notesTitle = new Paragraph("NOTES", section);
             notesTitle.setSpacingBefore(3f);

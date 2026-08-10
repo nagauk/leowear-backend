@@ -9,13 +9,15 @@ import com.clothstore.entity.PaymentStatus;
 import com.clothstore.exception.BadRequestException;
 import com.clothstore.exception.ResourceNotFoundException;
 import com.clothstore.repository.OrderRepository;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.*;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -27,15 +29,11 @@ import java.util.Map;
 /**
  * Razorpay payment integration for Leo Wear.
  *
- * <p>TODO — production setup:
- * <ol>
- *   <li>Create account at https://dashboard.razorpay.com/</li>
- *   <li>Settings → API Keys → Generate Test/Live keys</li>
- *   <li>Set razorpay.key-id, razorpay.key-secret, razorpay.mode=test|live in application.yml
- *       (or env RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_MODE)</li>
- *   <li>Enable UPI, Cards, NetBanking in Razorpay Dashboard → Payment Methods</li>
- * </ol>
- * Until real keys are set (mode=mock or key contains REPLACE), checkout uses a safe mock UI.
+ * <p>Performance notes:
+ * <ul>
+ *   <li>Razorpay order creation is outside a long DB transaction (no connection held during HTTP).</li>
+ *   <li>Shared RestClient with connect/read timeouts for predictable latency.</li>
+ * </ul>
  */
 @Service
 @Slf4j
@@ -43,10 +41,14 @@ public class PaymentService {
 
     private final OrderRepository orderRepository;
     private final OrderService orderService;
+    private final RestClient razorpayRestClient;
 
-    public PaymentService(OrderRepository orderRepository, @Lazy OrderService orderService) {
+    public PaymentService(OrderRepository orderRepository,
+                          @Lazy OrderService orderService,
+                          @Qualifier("razorpayRestClient") RestClient razorpayRestClient) {
         this.orderRepository = orderRepository;
         this.orderService = orderService;
+        this.razorpayRestClient = razorpayRestClient;
     }
 
     @Value("${razorpay.key-id}")
@@ -70,7 +72,9 @@ public class PaymentService {
         return keyId == null || keyId.contains("REPLACE") || keySecret == null || keySecret.contains("REPLACE");
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Build a payment session. DB load is brief; Razorpay HTTP runs without holding a transaction.
+     */
     public PaymentSessionDto createSession(Long orderId, String username) {
         Order order = loadOwnedOrder(orderId, username);
 
@@ -85,7 +89,6 @@ public class PaymentService {
 
         if (isCod) {
             if (order.getPaymentStatus() == PaymentStatus.PARTIAL) {
-                // Collect remaining balance (total − advance already paid)
                 BigDecimal paid = order.getPaidAmount() != null ? order.getPaidAmount() : BigDecimal.ZERO;
                 if (paid.compareTo(BigDecimal.ZERO) <= 0 && order.getPlatformCharge() != null) {
                     paid = order.getPlatformCharge();
@@ -96,7 +99,6 @@ public class PaymentService {
                 }
                 codRemaining = true;
             } else {
-                // First online payment: COD advance (reduces amount due at delivery)
                 BigDecimal advance = order.getPlatformCharge() != null
                         ? order.getPlatformCharge()
                         : new BigDecimal("99");
@@ -120,6 +122,7 @@ public class PaymentService {
         boolean mock = isMockMode();
 
         if (!mock) {
+            // External call — not inside @Transactional so DB pool is not blocked
             rzpOrderId = createRazorpayOrder(order, amountPaise);
         } else {
             log.info("Payment MOCK session for order {} amount ₹{} (codAdvance={}, codRemaining={})",
@@ -155,7 +158,7 @@ public class PaymentService {
                 .customerEmail(order.getUser().getEmail())
                 .customerPhone(order.getPhone() != null ? order.getPhone() : order.getUser().getPhone())
                 .mock(mock)
-                .codPlatformFee(codAdvance) // flag still means "COD advance session"
+                .codPlatformFee(codAdvance)
                 .message(message)
                 .build();
     }
@@ -200,11 +203,6 @@ public class PaymentService {
     @SuppressWarnings("unchecked")
     private String createRazorpayOrder(Order order, long amountPaise) {
         try {
-            RestTemplate rt = new RestTemplate();
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setBasicAuth(keyId, keySecret);
-
             Map<String, Object> body = Map.of(
                     "amount", amountPaise,
                     "currency", currency,
@@ -212,19 +210,25 @@ public class PaymentService {
                     "payment_capture", 1
             );
 
-            ResponseEntity<Map> resp = rt.exchange(
-                    "https://api.razorpay.com/v1/orders",
-                    HttpMethod.POST,
-                    new HttpEntity<>(body, headers),
-                    Map.class
-            );
+            long t0 = System.currentTimeMillis();
+            Map<String, Object> resp = razorpayRestClient.post()
+                    .uri("/orders")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .headers(h -> h.setBasicAuth(keyId, keySecret))
+                    .body(body)
+                    .retrieve()
+                    .body(Map.class);
+            log.info("Razorpay order created for {} in {}ms", order.getOrderNumber(), System.currentTimeMillis() - t0);
 
-            if (resp.getBody() == null || resp.getBody().get("id") == null) {
+            if (resp == null || resp.get("id") == null) {
                 throw new BadRequestException("Failed to create Razorpay order");
             }
-            return String.valueOf(resp.getBody().get("id"));
+            return String.valueOf(resp.get("id"));
         } catch (BadRequestException e) {
             throw e;
+        } catch (RestClientException e) {
+            log.error("Razorpay order create failed: {}", e.getMessage());
+            throw new BadRequestException("Payment gateway is slow or unavailable. Please try again.");
         } catch (Exception e) {
             log.error("Razorpay order create failed: {}", e.getMessage());
             throw new BadRequestException("Payment gateway error: " + e.getMessage());
