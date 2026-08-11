@@ -41,6 +41,15 @@ public class OrderItem {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal unitPrice;
 
+    /**
+     * Snapshot of the product's pre-discount MRP at order-placement time.
+     * Null when the product had no MRP (or MRP ≤ price). Used by the
+     * invoice / order-history breakdown to show "saved on this product"
+     * even after the catalog's {@code originalPrice} is later changed.
+     */
+    @Column(name = "original_unit_price", precision = 10, scale = 2)
+    private BigDecimal originalUnitPrice;
+
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal subtotal;
 }

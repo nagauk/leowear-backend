@@ -30,6 +30,7 @@ public class OrderService {
     private final EmailService emailService;
     private final UserRepository userRepository;
     private final StoreSettingsService storeSettingsService;
+    private final CouponService couponService;
 
     @Transactional
     public OrderDto placeOrder(String username, OrderRequest request) {
@@ -99,6 +100,16 @@ public class OrderService {
 
             BigDecimal subtotal = unitPrice.multiply(BigDecimal.valueOf(itemReq.getQuantity()));
 
+            // Snapshot the product's MRP if it had one at order time.
+            // Variants don't carry their own MRP — the product's `originalPrice`
+            // is the single source of truth for product-level discount.
+            BigDecimal originalUnitPrice = null;
+            BigDecimal mrp = product.getOriginalPrice();
+            if (mrp != null && mrp.compareTo(BigDecimal.ZERO) > 0
+                    && mrp.compareTo(unitPrice) > 0) {
+                originalUnitPrice = mrp;
+            }
+
             // Pick image matching color if possible
             String imageUrl = product.getImageUrl();
             if (color != null && product.getImages() != null) {
@@ -117,6 +128,7 @@ public class OrderService {
                     .color(color)
                     .quantity(itemReq.getQuantity())
                     .unitPrice(unitPrice)
+                    .originalUnitPrice(originalUnitPrice)
                     .subtotal(subtotal)
                     .build();
 
@@ -135,13 +147,40 @@ public class OrderService {
         BigDecimal delivery = storeSettingsService.computeDeliveryCharge(total);
         order.setSubtotal(total);
         order.setDeliveryCharge(delivery);
+
+        // ---- Coupon (optional) ----
+        // Validation runs first so we reject expired / over-quota / first-time
+        // mismatches before we start touching the order row. The actual
+        // redemption insert + timesUsed increment happens after orderRepository.save
+        // (inside the same transaction, so it rolls back if the save fails).
+        com.clothstore.entity.Coupon appliedCoupon = null;
+        String rawCode = request.getCouponCode();
+        if (rawCode != null && !rawCode.isBlank()) {
+            com.clothstore.dto.CouponValidationDto preview =
+                    couponService.validateForCustomer(rawCode, username, total);
+            appliedCoupon = couponService.getEntityForRedemption(preview.getCode());
+            BigDecimal discount = preview.getDiscountAmount() == null
+                    ? BigDecimal.ZERO : preview.getDiscountAmount();
+            // Discount applies to subtotal only — not delivery (keeps free-delivery rules intact).
+            order.setDiscountAmount(discount);
+            order.setCouponId(appliedCoupon.getId());
+            order.setCouponCodeSnapshot(appliedCoupon.getCode());
+        } else {
+            order.setDiscountAmount(BigDecimal.ZERO);
+            order.setCouponId(null);
+            order.setCouponCodeSnapshot(null);
+        }
+
         // COD: ₹99 advance online (part of total, not an extra fee); rest at delivery
         BigDecimal advance = BigDecimal.ZERO;
         if (order.getPaymentMethod() == PaymentMethod.COD) {
             advance = new BigDecimal("99");
         }
         order.setPlatformCharge(advance); // advance amount (legacy column name)
-        order.setTotalAmount(total.add(delivery)); // do NOT add advance on top of total
+        // Total = (subtotal − discount) + delivery. Delivery is added on top, not discounted.
+        BigDecimal discountForTotal = order.getDiscountAmount() == null
+                ? BigDecimal.ZERO : order.getDiscountAmount();
+        order.setTotalAmount(total.subtract(discountForTotal).add(delivery));
         order.setPaidAmount(BigDecimal.ZERO);
         if (request.getPincode() != null) {
             order.setPincode(request.getPincode());
@@ -149,6 +188,9 @@ public class OrderService {
         // PREPAID and COD stay PENDING until first online payment is confirmed
         order.setPaymentStatus(PaymentStatus.PENDING);
         orderRepository.save(order);
+        if (appliedCoupon != null) {
+            couponService.redeem(appliedCoupon, user, order);
+        }
         notifyCustomerStatus(order);
         // Place order runs as the customer — hide staff-only shipping details.
         return toDto(order, false);
@@ -208,6 +250,25 @@ public class OrderService {
             throw new BadRequestException("You cannot view this order");
         }
         return toDto(order, isAdmin);
+    }
+
+    /**
+     * Returns the order DTO only when it's both owned by the caller AND fully
+     * paid. Returns {@code null} otherwise so the polling loop on
+     * {@code OrdersComponent} treats "still processing" identically to
+     * "not found" — one terminal state, no false-positive redirects.
+     */
+    @Transactional(readOnly = true)
+    public OrderDto getRecentPaidOrder(Long id, String username) {
+        Order order = orderRepository.findById(id).orElse(null);
+        if (order == null) return null;
+        if (order.getUser() == null || !order.getUser().getUsername().equals(username)) {
+            return null;
+        }
+        if (order.getPaymentStatus() != PaymentStatus.PAID) {
+            return null;
+        }
+        return toDto(order, false);
     }
 
     public Page<OrderDto> getAllOrders(Pageable pageable) {
@@ -337,6 +398,10 @@ public class OrderService {
         // isStaff is retained for future field-level differences; shippingDetails
         // (courier / tracking / AWB) is intentionally exposed to the order owner
         // so customers can track SHIPPED / DELIVERED orders on "My Orders".
+        BigDecimal productDiscountTotal = computeProductDiscountTotal(order);
+        BigDecimal couponDiscount = order.getDiscountAmount() != null
+                ? order.getDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal totalSaved = productDiscountTotal.add(couponDiscount);
         return OrderDto.builder()
                 .id(order.getId())
                 .orderNumber(order.getOrderNumber())
@@ -371,6 +436,7 @@ public class OrderService {
                             .color(item.getColor())
                             .quantity(item.getQuantity())
                             .unitPrice(item.getUnitPrice())
+                            .originalUnitPrice(item.getOriginalUnitPrice())
                             .subtotal(item.getSubtotal())
                             .build();
                 }).toList())
@@ -378,6 +444,10 @@ public class OrderService {
                 .deliveryCharge(order.getDeliveryCharge())
                 .platformCharge(order.getPlatformCharge() != null ? order.getPlatformCharge() : BigDecimal.ZERO)
                 .totalAmount(order.getTotalAmount())
+                .discountAmount(order.getDiscountAmount())
+                .couponCode(order.getCouponCodeSnapshot())
+                .productDiscountTotal(productDiscountTotal)
+                .totalSaved(totalSaved)
                 .paidAmount(resolvePaidAmount(order))
                 .remainingAmount(resolveRemainingAmount(order))
                 .pincode(order.getPincode())
@@ -395,6 +465,26 @@ public class OrderService {
                 .createdAt(order.getCreatedAt())
                 .updatedAt(order.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * Sum of {@code (originalUnitPrice − unitPrice) × quantity} across items.
+     * Items without a snapshot MRP contribute nothing — older orders placed
+     * before this field existed will simply show 0 (no backfill needed).
+     */
+    private static BigDecimal computeProductDiscountTotal(Order order) {
+        if (order.getItems() == null || order.getItems().isEmpty()) return BigDecimal.ZERO;
+        BigDecimal sum = BigDecimal.ZERO;
+        for (OrderItem it : order.getItems()) {
+            BigDecimal mrp = it.getOriginalUnitPrice();
+            BigDecimal unit = it.getUnitPrice();
+            int qty = it.getQuantity() != null ? it.getQuantity() : 0;
+            if (mrp == null || unit == null || qty <= 0) continue;
+            BigDecimal perUnit = mrp.subtract(unit);
+            if (perUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+            sum = sum.add(perUnit.multiply(BigDecimal.valueOf(qty)));
+        }
+        return sum.setScale(2, java.math.RoundingMode.HALF_UP);
     }
 
     private BigDecimal resolvePaidAmount(Order order) {

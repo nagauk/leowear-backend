@@ -20,6 +20,12 @@ public class OrderRequest {
     /** COD or PREPAID */
     private String paymentMethod;
 
+    /**
+     * Optional coupon code. Validated server-side at order-placement time
+     * (not at this DTO parsing layer). Codes are normalised to upper-case.
+     */
+    private String couponCode;
+
     @Data
     public static class OrderItemRequest {
         @NotNull

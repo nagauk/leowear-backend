@@ -52,7 +52,7 @@ public class OrderPdfService {
     private static final DateTimeFormatter PRINT_TS = DateTimeFormatter.ofPattern("dd MMM yyyy HH:mm");
     private static final DateTimeFormatter DATE_ONLY = DateTimeFormatter.ofPattern("dd MMM yyyy");
 
-    /** Landscape A4 usable width ≈ 770pt. Sum equals COLUMN_TOTAL. */
+    /** Landscape A4 usable width ≈ 770pt. Sum equals COLUMN_TOTAL (≈ 782pt; leaves minor slack). */
     private static final float[] COLUMN_WIDTHS = {
             56f,  // Order #
             64f,  // Customer
@@ -62,12 +62,13 @@ public class OrderPdfService {
             56f,  // Total
             62f,  // Payment
             46f,  // Status
-            96f,  // Shipping details
+            88f,  // Shipping details
+            56f,  // Saved (product discount + coupon)
             48f   // Date
     };
     private static final String[] HEADERS = {
             "Order #", "Customer", "Address", "Phone", "Items",
-            "Total", "Payment", "Status", "Shipping Details", "Date"
+            "Total", "Payment", "Status", "Shipping Details", "Saved", "Date"
     };
 
     /** Status colour accents — applied to the status cell so a printed sheet is glanceable. */
@@ -276,6 +277,20 @@ public class OrderPdfService {
         } else {
             addTextCell(table, shipping, bodyFont);
         }
+
+        // Saved = product discount + coupon discount (null-safe; green when > 0).
+        BigDecimal productDisc = d.getProductDiscountTotal() != null
+                ? d.getProductDiscountTotal() : BigDecimal.ZERO;
+        BigDecimal couponDisc = d.getDiscountAmount() != null
+                ? d.getDiscountAmount() : BigDecimal.ZERO;
+        BigDecimal saved = productDisc.add(couponDisc);
+        String savedText = saved.compareTo(BigDecimal.ZERO) > 0
+                ? rupees(saved)
+                : "—";
+        Font savedFont = saved.compareTo(BigDecimal.ZERO) > 0
+                ? FontFactory.getFont(FontFactory.HELVETICA_BOLD, 9, SAVED_GREEN)
+                : mutedFont;
+        addTextCell(table, savedText, savedFont, Element.ALIGN_RIGHT);
 
         // Date
         String date = d.getCreatedAt() == null ? "" : d.getCreatedAt().toLocalDate().format(DATE_ONLY);
@@ -497,6 +512,8 @@ public class OrderPdfService {
     private static final Color ACCENT = new Color(26, 26, 46);
     private static final Color LIGHT_BG = new Color(245, 245, 248);
     private static final Color LINE = new Color(210, 210, 220);
+    /** Green accent used for "you saved" lines (invoice + export). */
+    private static final Color SAVED_GREEN = new Color(0x16, 0xA3, 0x4A);
 
     /** Result of invoice generation: PDF bytes + suggested download filename. */
     public record InvoicePdf(byte[] bytes, String filename) {}
@@ -710,8 +727,10 @@ public class OrderPdfService {
     private void addTotalsBlock(Document doc, Order order) {
         Font label = FontFactory.getFont(FontFactory.HELVETICA, 7, MUTED);
         Font value = FontFactory.getFont(FontFactory.HELVETICA, 7, INK);
+        Font green = FontFactory.getFont(FontFactory.HELVETICA, 7, SAVED_GREEN);
         Font totalL = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, ACCENT);
         Font totalV = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, ACCENT);
+        Font greenBold = FontFactory.getFont(FontFactory.HELVETICA_BOLD, 8, SAVED_GREEN);
 
         PdfPTable t = new PdfPTable(2);
         t.setWidthPercentage(55f);
@@ -722,6 +741,8 @@ public class OrderPdfService {
         BigDecimal sub = order.getSubtotal() != null ? order.getSubtotal() : BigDecimal.ZERO;
         BigDecimal del = order.getDeliveryCharge() != null ? order.getDeliveryCharge() : BigDecimal.ZERO;
         BigDecimal advance = order.getPlatformCharge() != null ? order.getPlatformCharge() : BigDecimal.ZERO;
+        BigDecimal coupon = order.getDiscountAmount() != null ? order.getDiscountAmount() : BigDecimal.ZERO;
+        String couponCode = order.getCouponCodeSnapshot();
         // Total is subtotal + delivery only; advance is not an extra charge
         BigDecimal tot = order.getTotalAmount() != null ? order.getTotalAmount() : sub.add(del);
         BigDecimal paid = order.getPaidAmount() != null ? order.getPaidAmount() : BigDecimal.ZERO;
@@ -735,8 +756,22 @@ public class OrderPdfService {
         BigDecimal remaining = tot.subtract(paid);
         if (remaining.compareTo(BigDecimal.ZERO) < 0) remaining = BigDecimal.ZERO;
 
+        BigDecimal productDiscount = computeProductDiscountTotal(order);
+        BigDecimal totalSaved = productDiscount.add(coupon);
+
         t.addCell(totalCell("Subtotal", label, Element.ALIGN_RIGHT));
         t.addCell(totalCell(rupees(sub), value, Element.ALIGN_RIGHT));
+
+        if (productDiscount.compareTo(BigDecimal.ZERO) > 0) {
+            t.addCell(totalCell("Product discount", green, Element.ALIGN_RIGHT));
+            t.addCell(totalCell("−" + rupees(productDiscount), green, Element.ALIGN_RIGHT));
+        }
+        if (coupon.compareTo(BigDecimal.ZERO) > 0) {
+            String couponLabel = "Discount";
+            t.addCell(totalCell(couponLabel, green, Element.ALIGN_RIGHT));
+            t.addCell(totalCell("−" + rupees(coupon), green, Element.ALIGN_RIGHT));
+        }
+
         t.addCell(totalCell("Delivery", label, Element.ALIGN_RIGHT));
         t.addCell(totalCell(rupees(del), value, Element.ALIGN_RIGHT));
 
@@ -757,6 +792,11 @@ public class OrderPdfService {
         t.addCell(totalCell("TOTAL", totalL, Element.ALIGN_RIGHT));
         t.addCell(totalCell(rupees(tot), totalV, Element.ALIGN_RIGHT));
 
+        if (totalSaved.compareTo(BigDecimal.ZERO) > 0) {
+            t.addCell(totalCell(rupees(totalSaved), greenBold, Element.ALIGN_RIGHT));
+            t.addCell(totalCell("Total saved", greenBold, Element.ALIGN_RIGHT));
+        }
+
         if (paid.compareTo(BigDecimal.ZERO) > 0 || remaining.compareTo(BigDecimal.ZERO) > 0) {
             t.addCell(totalCell("Paid", label, Element.ALIGN_RIGHT));
             t.addCell(totalCell(rupees(paid), value, Element.ALIGN_RIGHT));
@@ -775,6 +815,26 @@ public class OrderPdfService {
         }
 
         doc.add(t);
+    }
+
+    /**
+     * Sum of {@code (originalUnitPrice − unitPrice) × quantity} across items.
+     * Mirrors {@code OrderService.computeProductDiscountTotal} — kept local so
+     * the PDF service stays a leaf dependency.
+     */
+    private static BigDecimal computeProductDiscountTotal(Order order) {
+        if (order.getItems() == null || order.getItems().isEmpty()) return BigDecimal.ZERO;
+        BigDecimal sum = BigDecimal.ZERO;
+        for (OrderItem it : order.getItems()) {
+            BigDecimal mrp = it.getOriginalUnitPrice();
+            BigDecimal unit = it.getUnitPrice();
+            int qty = it.getQuantity() != null ? it.getQuantity() : 0;
+            if (mrp == null || unit == null || qty <= 0) continue;
+            BigDecimal perUnit = mrp.subtract(unit);
+            if (perUnit.compareTo(BigDecimal.ZERO) <= 0) continue;
+            sum = sum.add(perUnit.multiply(BigDecimal.valueOf(qty)));
+        }
+        return sum.setScale(2, RoundingMode.HALF_UP);
     }
 
     private PdfPCell totalCell(String text, Font font, int align) {

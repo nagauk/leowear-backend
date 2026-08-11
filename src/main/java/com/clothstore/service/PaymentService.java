@@ -11,9 +11,11 @@ import com.clothstore.exception.ResourceNotFoundException;
 import com.clothstore.repository.OrderRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.context.ApplicationEventPublisher;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClient;
@@ -42,13 +44,16 @@ public class PaymentService {
     private final OrderRepository orderRepository;
     private final OrderService orderService;
     private final RestClient razorpayRestClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     public PaymentService(OrderRepository orderRepository,
                           @Lazy OrderService orderService,
-                          @Qualifier("razorpayRestClient") RestClient razorpayRestClient) {
+                          @Qualifier("razorpayRestClient") RestClient razorpayRestClient,
+                          ApplicationEventPublisher eventPublisher) {
         this.orderRepository = orderRepository;
         this.orderService = orderService;
         this.razorpayRestClient = razorpayRestClient;
+        this.eventPublisher = eventPublisher;
     }
 
     @Value("${razorpay.key-id}")
@@ -163,9 +168,47 @@ public class PaymentService {
                 .build();
     }
 
+    /**
+     * Verify payment and mark the order PAID. Runs on the
+     * {@code paymentVerifyExecutor} so the HTTP request returns immediately —
+     * the customer's browser can redirect to {@code /orders} in parallel and
+     * poll {@code GET /orders/recent-paid/{id}} until the order flips to PAID.
+     *
+     * <p>Mock mode is handled synchronously (returns the same call) because
+     * the mock "payment" is instantaneous and we want the redirect to land on
+     * an already-PAID order.</p>
+     *
+     * <p>Signature verification errors throw {@link BadRequestException} which
+     * is logged on the worker thread — the HTTP caller has already moved on,
+     * but the {@link com.clothstore.config.AuditFilter} records the request.</p>
+     */
+    @Async("paymentVerifyExecutor")
+    public void verifyAndConfirmAsync(String username, PaymentVerifyRequest req) {
+        try {
+            OrderDto dto = doVerifyAndConfirm(username, req);
+            if (dto != null) {
+                eventPublisher.publishEvent(new PaymentVerifiedEvent(
+                        dto.getId(),
+                        username,
+                        dto.getPaymentStatus()));
+            }
+        } catch (Exception ex) {
+            log.error("Async payment verify failed for order {}: {}",
+                    req == null ? null : req.getOrderId(), ex.getMessage(), ex);
+        }
+    }
+
+    /** Mock-mode entry: synchronous verify because there's no IO to wait for. */
     @Transactional
     public OrderDto verifyAndConfirm(String username, PaymentVerifyRequest req) {
-        if (req.getOrderId() == null) {
+        return doVerifyAndConfirm(username, req);
+    }
+
+    /**
+     * Core verify+confirm logic shared by both entry points.
+     */
+    private OrderDto doVerifyAndConfirm(String username, PaymentVerifyRequest req) {
+        if (req == null || req.getOrderId() == null) {
             throw new BadRequestException("orderId is required");
         }
         Order order = loadOwnedOrder(req.getOrderId(), username);

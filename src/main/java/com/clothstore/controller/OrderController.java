@@ -57,6 +57,27 @@ public class OrderController {
                 orderService.getOrderById(id, auth.getName(), isAdmin)));
     }
 
+    /**
+     * Safe-redirect probe: returns the order as a DTO only if it's PAID and
+     * owned by the caller. Used by {@code OrdersComponent} after a payment
+     * redirect, polled every 1s up to 30s, so the page never shows blank
+     * while the async verify worker is still finalising the row.
+     *
+     * <p>Returns 404 for both "not found" and "still processing" so the
+     * polling loop has one terminal state.</p>
+     */
+    @GetMapping("/recent-paid/{id}")
+    public ResponseEntity<ApiResponse<OrderDto>> recentPaid(
+            @PathVariable Long id,
+            Authentication auth) {
+        OrderDto dto = orderService.getRecentPaidOrder(id, auth.getName());
+        if (dto == null) {
+            return ResponseEntity.status(404)
+                    .body(ApiResponse.error("Payment is still being verified"));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(dto));
+    }
+
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN','EMPLOYEE')")
     public ResponseEntity<ApiResponse<Page<OrderDto>>> allOrders(

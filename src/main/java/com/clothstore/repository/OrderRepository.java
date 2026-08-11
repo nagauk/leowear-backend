@@ -28,6 +28,17 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     long countByStatus(OrderStatus status);
 
+    /** Used by CouponService to enforce the "first-time customer" rule. */
+    long countByUserIdAndStatusNotIn(Long userId, java.util.Collection<String> statuses);
+
+    /**
+     * Lookup used by CouponService to resolve a username to a {@link User}
+     * entity without depending on {@code UserRepository} (which is admin-portal
+     * territory and not always injected in the order pipeline).
+     */
+    @Query("SELECT u FROM User u WHERE u.username = :username")
+    Optional<User> findUserForCouponValidation(@Param("username") String username);
+
     @Query("SELECT COALESCE(SUM(o.totalAmount), 0) FROM Order o WHERE o.status NOT IN ('CANCELLED', 'RETURNED')")
     BigDecimal getTotalSales();
 

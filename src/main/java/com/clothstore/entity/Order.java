@@ -35,6 +35,24 @@ public class Order {
     @Column(name = "subtotal", precision = 12, scale = 2)
     private BigDecimal subtotal;
 
+    /**
+     * Coupon discount applied at order-placement time. Reduces
+     * {@code totalAmount} (subtotal + delivery − discount). Null/zero for
+     * orders placed without a coupon. Authoritative count of redemptions is
+     * in {@code coupon_redemptions}; {@code couponCodeSnapshot} below is the
+     * captured code so historical invoices still show the coupon after the
+     * coupon row is deleted or edited.
+     */
+    @Column(name = "coupon_id")
+    private Long couponId;
+
+    @Column(name = "coupon_code_snapshot", length = 20)
+    private String couponCodeSnapshot;
+
+    @Column(name = "discount_amount", precision = 12, scale = 2)
+    @Builder.Default
+    private BigDecimal discountAmount = BigDecimal.ZERO;
+
     @Column(name = "delivery_charge", precision = 10, scale = 2)
     @Builder.Default
     private BigDecimal deliveryCharge = BigDecimal.ZERO;

@@ -20,6 +20,19 @@ public class OrderDto {
     /** COD advance (₹99); included in total, not an extra fee. */
     private BigDecimal platformCharge;
     private BigDecimal totalAmount;
+    /** Coupon discount applied at order-placement time (subtotal × %). */
+    private BigDecimal discountAmount;
+    /** Snapshot of the coupon code so historical orders still show it. */
+    private String couponCode;
+    /** Snapshot of the coupon description shown in order summaries. */
+    private String couponDescription;
+    /**
+     * Sum of {@code (originalUnitPrice − unitPrice) × quantity} across items.
+     * The "saved on this order's products" line shown in invoice and history.
+     */
+    private BigDecimal productDiscountTotal;
+    /** {@code productDiscountTotal + discountAmount}; the headline "saved" figure. */
+    private BigDecimal totalSaved;
     /** Amount already collected (COD advance or full prepaid). */
     private BigDecimal paidAmount;
     /** totalAmount − paidAmount; due at delivery for COD PARTIAL. */
@@ -51,6 +64,8 @@ public class OrderDto {
         private String color;
         private Integer quantity;
         private BigDecimal unitPrice;
+        /** Pre-discount MRP for this line (nullable). */
+        private BigDecimal originalUnitPrice;
         private BigDecimal subtotal;
     }
 }

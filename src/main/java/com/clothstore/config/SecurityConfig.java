@@ -74,6 +74,11 @@ public class SecurityConfig {
                 // on every new admin endpoint or it will be open to both roles.
                 .requestMatchers("/api/admin/employees/**").hasRole("ADMIN")
                 .requestMatchers("/api/admin/**").hasAnyRole("ADMIN", "EMPLOYEE")
+                // Coupon resource: ADMIN-only by default (covers GET list, get-by-id,
+                // POST/PUT/DELETE). /validate is opened up to CUSTOMER below so
+                // customers can preview a coupon before placing the order.
+                .requestMatchers(HttpMethod.POST, "/api/coupons/validate").hasRole("CUSTOMER")
+                .requestMatchers("/api/coupons/**").hasRole("ADMIN")
                 .requestMatchers("/api/orders/**").authenticated()
                 .requestMatchers("/api/payments/**").authenticated()
                 .requestMatchers("/api/returns/**").authenticated()
