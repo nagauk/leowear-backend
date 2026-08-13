@@ -69,7 +69,7 @@ spring:
 # JWT Configuration
 jwt:
   secret: ClothStoreSecretKeyForJWTTokenGenerationMustBeAtLeast256BitsLong2024SecureKey!!
-  access-token-expiration-ms: 900000
+  access-token-expiration-ms: 32000000
   refresh-token-expiration-ms: 604800000
 
 # CORS
